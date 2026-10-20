@@ -763,6 +763,7 @@ dependencies = [
  "kora-financing-pool",
  "kora-invoice-nft",
  "kora-marketplace",
+ "kora-parameter-registry",
  "kora-price-oracle",
  "kora-risk-registry",
  "kora-secondary-market",
@@ -883,6 +884,7 @@ dependencies = [
  "kora-risk-registry",
  "kora-secondary-market",
  "kora-shared",
+ "kora-tranche",
  "kora-treasury",
  "soroban-sdk",
 ]

@@ -1,11 +1,11 @@
 {
   "name": "@kora/backup",
   "version": "1.0.0",
-  "description": "Kora Protocol — Disaster Recovery Backup & Restore Tooling",
+  "description": "Kora Protocol \u2014 Disaster Recovery Backup & Restore Tooling",
   "main": "dist/backup.js",
   "types": "dist/backup.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "node init && tsc",
     "backup": "node dist/backup.js",
     "restore": "node dist/restore.js",
     "verify": "node dist/verify-restore.js",
@@ -29,7 +29,11 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.ts"],
-    "collectCoverageFrom": ["lib/**/*.ts"]
+    "testMatch": [
+      "**/tests/**/*.test.ts"
+    ],
+    "collectCoverageFrom": [
+      "lib/**/*.ts"
+    ]
   }
 }

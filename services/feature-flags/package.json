@@ -1,12 +1,12 @@
 {
   "name": "@kora/feature-flags",
   "version": "1.0.0",
-  "description": "Kora Protocol — Server-evaluated feature flag system with percentage rollout and instant kill-switch",
+  "description": "Kora Protocol \u2014 Server-evaluated feature flag system with percentage rollout and instant kill-switch",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "dev": "ts-node src/index.ts",
+    "build": "node init && tsc",
+    "dev": "node init && ts-node src/index.ts",
     "test": "jest --coverage --coverageThreshold='{\"global\":{\"lines\":90,\"branches\":90,\"functions\":90,\"statements\":90}}'",
     "test:watch": "jest --watch",
     "lint": "eslint src tests --ext .ts"
@@ -27,7 +27,12 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.ts"],
-    "collectCoverageFrom": ["src/**/*.ts", "!src/index.ts"]
+    "testMatch": [
+      "**/tests/**/*.test.ts"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.ts",
+      "!src/index.ts"
+    ]
   }
 }

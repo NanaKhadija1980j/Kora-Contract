@@ -85,3 +85,10 @@ path = "fuzz_targets/fuzz_secondary_market_settlement.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_parameter_registry_bounds"
+path = "fuzz_targets/fuzz_parameter_registry_bounds.rs"
+test = false
+doc = false
+bench = false

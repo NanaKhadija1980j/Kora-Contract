@@ -728,6 +728,34 @@ The automated checker flags any `pub fn` not present in this matrix as an error,
 
 ---
 
+### 14. tranche (added by issue #990)
+
+The tranche contract composes `financing_pool` positions into a structured
+product. Two roles govern it:
+
+- **Admin** — the tranche admin. Owns the composition allow-list and the
+  financing-pool pointer. Set at deployment (`TRANCHE_ADMIN`).
+- **Authorized Caller** — contracts allowed to drive the composition hooks
+  (by default the `financing_pool` contract, which links its positions into
+  a tranche). The allow-list is managed by the admin through
+  `add_authorized_caller` / `remove_authorized_caller`.
+
+| Entrypoint | Required Role | Conditional Authorization | Notes |
+|------------|---------------|---------------------------|-------|
+| `initialize` | **Admin** | One-time; must not already be initialized | Stores admin and dependency addresses |
+| `create_tranche` | **Creator (Self)** | Invoice list must be non-empty | Creates a tranche from listed invoices |
+| `fund_tranche` | **Investor (Self)** | Tranche must exist and be open; amount non-zero | Records the investor's tranche position |
+| `get_tranche` | Permissionless | Read-only | |
+| `set_financing_pool` | **Admin** | Rejects self address | Re-points the composition pool |
+| `get_financing_pool` | Permissionless | Read-only | Composition pool address |
+| `add_authorized_caller` | **Admin** | Rejects self address | Extends the composition allow-list |
+| `remove_authorized_caller` | **Admin** | | Revokes a composition caller |
+| `is_authorized_caller` | Permissionless | Read-only | Composition allow-list membership |
+| `link_pool_position` | **Authorized Caller (Self)** | Must be on the allow-list; tranche must exist and be open; pool position must not already be linked | Links a financing-pool position into a tranche |
+| `get_pool_positions` | Permissionless | Read-only | Pool positions linked to a tranche |
+
+---
+
 ## Contributor Guide: Adding New Matrix Rows
 
 When you add a new `pub fn` to any contract in `contracts/` **or** add a new contract to `scripts/deploy.sh`:

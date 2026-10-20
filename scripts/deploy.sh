@@ -14,6 +14,8 @@
 # Dependency order (must match constructor requirements):
 #   access_control → invoice_nft / risk_registry / dispute_resolution / debtor_attestation
 #   → financing_pool → dispute_escrow → marketplace
+#   → tranche (composes financing_pool positions; deployed after the pool so
+#     the tranche can be wired to the pool address in one pass)
 # =============================================================================
 # Environment Variables (all optional — defaults shown)
 # =============================================================================
@@ -34,6 +36,13 @@
 #   DEPLOY_DISPUTE_ESCROW     Optional: true to deploy repayment escrow (default: false).
 #                             Requires pool escrow hooks before custody can be used;
 #                             see docs/dispute-escrow.md.
+#   TRANCHE_ADMIN             Optional: admin address for the tranche contract
+#                             (default: the deployer admin). The tranche contract owns
+#                             the composition allow-list, so its admin should be the
+#                             address that governs pool composition.
+#   TRANCHE_AUTHORIZED_CALLER Optional: contract address authorised to drive the
+#                             tranche composition hooks (default: the financing pool
+#                             address, which links its positions into tranches).
 #
 # =============================================================================
 
@@ -59,6 +68,20 @@ case "$DEPLOY_DISPUTE_ESCROW" in
   true|false) ;;
   *) echo "ERROR: DEPLOY_DISPUTE_ESCROW must be true or false." >&2; exit 1 ;;
 esac
+# Tranche composition wiring (issue #990). TRANCHE_ADMIN defaults to the
+# deployer admin; TRANCHE_AUTHORIZED_CALLER defaults to the financing pool
+# address, which is the contract that links pool positions into a tranche.
+TRANCHE_ADMIN="${TRANCHE_ADMIN:-}"
+TRANCHE_AUTHORIZED_CALLER="${TRANCHE_AUTHORIZED_CALLER:-}"
+
+# Debtor attestation wiring. The admin defaults to the deployer admin (set
+# after ADMIN is derived below); the max age defaults to 7 days.
+DEBTOR_ATTESTATION_MAX_AGE="${DEBTOR_ATTESTATION_MAX_AGE:-604800}"
+DEBTOR_ATTESTATION_RELAYS="${DEBTOR_ATTESTATION_RELAYS:-}"
+
+# Governance voting is recorded in the manifest but is not deployed by this
+# script; an empty address keeps the manifest valid JSON.
+GOVERNANCE_VOTING_ID="${GOVERNANCE_VOTING_ID:-}"
 
 # ── Network config ────────────────────────────────────────────────────────────
 
@@ -142,6 +165,10 @@ ADMIN=$(stellar keys address "$SOURCE" 2>/dev/null || echo "$SOURCE")
 echo "Admin   : $ADMIN"
 echo ""
 
+# The debtor attestation admin defaults to the deployer admin so the script
+# runs under `set -u` when the operator does not override it.
+DEBTOR_ATTESTATION_ADMIN="${DEBTOR_ATTESTATION_ADMIN:-$ADMIN}"
+
 echo "--- Protocol parameters ---"
 echo "  TREASURY_FEE_BPS       : $TREASURY_FEE_BPS"
 echo "  MARKETPLACE_FEE_BPS    : $MARKETPLACE_FEE_BPS"
@@ -173,6 +200,11 @@ echo "  debtor_attestation: $DEBTOR_ATTESTATION_ID"
 
 POOL_ID=$(deploy_contract "financing_pool" "$WASM_DIR/kora_financing_pool.wasm")
 echo "  financing_pool : $POOL_ID"
+
+# The tranche contract composes financing_pool positions, so it is deployed
+# after the pool (issue #990).
+TRANCHE_ID=$(deploy_contract "tranche" "$WASM_DIR/kora_tranche.wasm")
+echo "  tranche        : $TRANCHE_ID"
 
 PARAMETER_REGISTRY_ID=$(deploy_contract "parameter_registry" "$WASM_DIR/kora_parameter_registry.wasm")
 echo "  parameter_registry : $PARAMETER_REGISTRY_ID"
@@ -236,6 +268,50 @@ invoke "$POOL_ID" initialize \
   --max_position_bps "$MAX_POSITION_BPS"
 echo "  financing_pool initialized (late penalty: ${LATE_PENALTY_BPS} bps, max position: ${MAX_POSITION_BPS} bps)"
 
+# Tranche composition wiring (issue #990).
+#
+# The tranche contract composes financing_pool positions, so it can only be
+# initialized once the pool address is known. Fail fast rather than deploying a
+# tranche that can never be wired to a pool.
+if [ -z "$POOL_ID" ]; then
+  echo "ERROR: financing_pool address is empty; cannot deploy tranche." >&2
+  exit 1
+fi
+
+# The tranche admin governs the composition allow-list. It defaults to the
+# deployer admin and can be overridden with TRANCHE_ADMIN. Because the
+# deployment transaction is signed by DEPLOYER_SECRET, the tranche admin must
+# be an account the deployer can sign for — in practice the deployer itself.
+TRANCHE_ADMIN="${TRANCHE_ADMIN:-$ADMIN}"
+if [ "$TRANCHE_ADMIN" != "$ADMIN" ]; then
+  echo "ERROR: TRANCHE_ADMIN ($TRANCHE_ADMIN) must be the deployer admin ($ADMIN)." >&2
+  echo "       The deployment transaction is signed by DEPLOYER_SECRET, so the" >&2
+  echo "       tranche admin has to be an account the deployer can sign for." >&2
+  exit 1
+fi
+# The authorised composition caller defaults to the financing pool, which is
+# the contract that links its positions into a tranche.
+TRANCHE_AUTHORIZED_CALLER="${TRANCHE_AUTHORIZED_CALLER:-$POOL_ID}"
+
+invoke "$TRANCHE_ID" initialize \
+  --admin "$TRANCHE_ADMIN" \
+  --invoice_nft "$INVOICE_NFT_ID" \
+  --financing_pool "$POOL_ID" \
+  --treasury "$TREASURY_ID" \
+  --access_control "$ACCESS_CONTROL_ID"
+echo "  tranche initialized (admin: ${TRANCHE_ADMIN})"
+
+# Re-assert the pool pointer explicitly so the composition target is visible
+# in the deployment log, and authorise the caller that may link pool positions
+# into tranches.
+invoke "$TRANCHE_ID" set_financing_pool \
+  --admin "$TRANCHE_ADMIN" \
+  --financing_pool "$POOL_ID"
+invoke "$TRANCHE_ID" add_authorized_caller \
+  --admin "$TRANCHE_ADMIN" \
+  --caller "$TRANCHE_AUTHORIZED_CALLER"
+echo "  tranche wired to financing_pool (authorized caller: ${TRANCHE_AUTHORIZED_CALLER})"
+
 invoke "$PARAMETER_REGISTRY_ID" initialize --admin "$ADMIN"
 echo "  parameter_registry initialized"
 
@@ -285,6 +361,7 @@ AC_HASH=$(sha256sum "$WASM_DIR/kora_access_control.wasm" | awk '{print $1}')
 INVOICE_HASH=$(sha256sum "$WASM_DIR/kora_invoice_nft.wasm" | awk '{print $1}')
 TREASURY_HASH=$(sha256sum "$WASM_DIR/kora_treasury.wasm" | awk '{print $1}')
 POOL_HASH=$(sha256sum "$WASM_DIR/kora_financing_pool.wasm" | awk '{print $1}')
+TRANCHE_HASH=$(sha256sum "$WASM_DIR/kora_tranche.wasm" | awk '{print $1}')
 MARKETPLACE_HASH=$(sha256sum "$WASM_DIR/kora_marketplace.wasm" | awk '{print $1}')
 RISK_HASH=$(sha256sum "$WASM_DIR/kora_risk_registry.wasm" | awk '{print $1}')
 PRICE_ORACLE_HASH=$(sha256sum "$WASM_DIR/kora_price_oracle.wasm" | awk '{print $1}')
@@ -333,6 +410,10 @@ cat > "$TEMP_MANIFEST" <<EOF
     "financing_pool": {
       "address": "$POOL_ID",
       "wasm_hash": "$POOL_HASH"
+    },
+    "tranche": {
+      "address": "$TRANCHE_ID",
+      "wasm_hash": "$TRANCHE_HASH"
     },
     "marketplace": {
       "address": "$MARKETPLACE_ID",

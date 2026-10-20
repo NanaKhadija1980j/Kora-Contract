@@ -23,6 +23,7 @@ kora-price-oracle = { path = "../price_oracle" }
 kora-dispute-resolution = { path = "../dispute_resolution" }
 kora-dispute-escrow = { path = "../dispute_escrow" }
 kora-secondary-market = { path = "../secondary_market" }
+kora-parameter-registry = { path = "../parameter_registry" }
 
 [dev-dependencies]
 rand = "0.8"

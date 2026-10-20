@@ -12,6 +12,7 @@
 /// - Integration: Makefile targets for ease of use
 /// - Baseline: Initial mutation-kill-rate across entire workspace
 /// - Focus Areas: financing_pool and treasury contracts (high-risk)
+/// - Marketplace listing fees: focused run via `mutants.toml` (issue #998)
 ///
 /// Scope:
 /// - Establish mutation testing tooling and baseline only
@@ -36,6 +37,7 @@ mod issue_681_mutation_testing_setup {
             "make mutants",              // Run mutation testing on entire workspace
             "make mutants-focus-financing-pool",  // Focus on high-risk contract
             "make mutants-focus-treasury",        // Focus on high-risk contract
+            "make mutants-focus-marketplace-fees", // Focus on marketplace fees (#998)
             "make mutants-baseline",     // Generate baseline report
         ];
 
@@ -111,6 +113,106 @@ mod issue_681_mutation_testing_setup {
         for (category, description) in mutation_categories {
             println!("{}: {}", category, description);
         }
+    }
+
+    /// Issue #998: the marketplace listing-fee focus configuration must exist
+    /// and must reference the fee paths whose mutants are not allowed to
+    /// survive.
+    ///
+    /// The focus file is `mutants.toml` at the repository root. It is the
+    /// single source of truth for:
+    ///   * the package the focus run is allowed to mutate,
+    ///   * the marketplace fee source files,
+    ///   * the fee-calculation symbols and the `FeeContribution` storage path,
+    ///   * the treasury routing branches, and
+    ///   * the documented equivalent-mutant allow list.
+    ///
+    /// A fee-math mutant that survives means lost protocol revenue or an
+    /// overcharged investor, so the focus set has to exist and has to name
+    /// those symbols.
+    #[test]
+    fn test_marketplace_fee_mutants_config_exists() {
+        let focus_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../mutants.toml");
+        let focus = std::fs::read_to_string(focus_path)
+            .expect("mutants.toml (marketplace fee focus config) must exist at the repo root");
+
+        // The focus run must never mutate the whole workspace.
+        assert!(
+            focus.contains("kora-marketplace"),
+            "mutants.toml must scope the focus run to the kora-marketplace package"
+        );
+
+        // The fee source files under mutation.
+        assert!(
+            focus.contains("contracts/marketplace/src/lib.rs"),
+            "mutants.toml must reference the marketplace contract source file"
+        );
+
+        // The fee-calculation symbols whose mutants must be killed.
+        for symbol in [
+            "base_fee_bps",
+            "referrer_split_bps",
+            "apply_set_fee_bps",
+            "apply_set_referrer_split_bps",
+        ] {
+            assert!(
+                focus.contains(symbol),
+                "mutants.toml must focus the marketplace fee symbol `{}`",
+                symbol
+            );
+        }
+
+        // The per-(invoice, investor) fee record used by claim_refund.
+        assert!(
+            focus.contains("FeeContribution"),
+            "mutants.toml must focus the FeeContribution storage path"
+        );
+
+        // The treasury routing branches (fee collection and refund).
+        for branch in ["collect_fee", "refund_fee"] {
+            assert!(
+                focus.contains(branch),
+                "mutants.toml must focus the treasury routing branch `{}`",
+                branch
+            );
+        }
+    }
+
+    /// Issue #998: the workspace-wide cargo-mutants config points at the
+    /// marketplace fee focus file, so `cargo mutants` (the default config)
+    /// and the focused Makefile target stay in sync.
+    #[test]
+    fn test_cargo_mutants_config_references_marketplace_fee_focus() {
+        let config_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../cargo-mutants.toml");
+        let config = std::fs::read_to_string(config_path)
+            .expect("cargo-mutants.toml must exist at the repo root");
+
+        assert!(
+            config.contains("mutants.toml"),
+            "cargo-mutants.toml must reference the marketplace fee focus file (mutants.toml)"
+        );
+    }
+
+    /// Issue #998: the Makefile exposes the focused marketplace fee mutation
+    /// target, and the CI workflow wires the same target into a job with a
+    /// timeout so the run stays bounded.
+    #[test]
+    fn test_marketplace_fee_mutants_target_is_wired() {
+        let makefile_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Makefile");
+        let makefile = std::fs::read_to_string(makefile_path).expect("Makefile must exist");
+
+        assert!(
+            makefile.contains("mutants-focus-marketplace-fees:"),
+            "Makefile must expose the mutants-focus-marketplace-fees target"
+        );
+
+        let ci_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.github/workflows/ci.yml");
+        let ci = std::fs::read_to_string(ci_path).expect("CI workflow must exist");
+
+        assert!(
+            ci.contains("mutants-focus-marketplace-fees"),
+            "CI must run the focused marketplace fee mutation target"
+        );
     }
 }
 

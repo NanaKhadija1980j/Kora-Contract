@@ -2,7 +2,7 @@
 # Kora Protocol — Makefile
 # =============================================================================
 
-.PHONY: build test clean fmt lint check check-access-matrix audit coverage coverage-per-contract deploy-testnet deploy-mainnet fuzz fuzz-deep help build-optimized test-verbose setup sizes
+.PHONY: build test clean fmt lint check check-access-matrix audit coverage coverage-per-contract coverage-extended deploy-testnet deploy-mainnet fuzz fuzz-deep mutants mutants-focus-marketplace-fees help build-optimized test-verbose setup sizes
 
 WASM_TARGET := wasm32-unknown-unknown
 CONTRACTS   := access_control invoice_nft marketplace financing_pool treasury risk_registry price_oracle tranche dispute_resolution dispute_escrow governance governance_voting parameter_registry debtor_attestation
@@ -26,6 +26,20 @@ COVERAGE_MIN_FINANCING_POOL   ?= 95
 COVERAGE_MIN_TREASURY         ?= 95
 COVERAGE_MIN_RISK_REGISTRY    ?= 85
 
+# Per-crate coverage floors for the extended workspace contracts (issue #997).
+#
+# The floors themselves live in `config/coverage-floor.toml` so they are
+# reviewed as data rather than as Makefile variables. The Makefile reads them
+# from there; `make coverage-extended` enforces every one of them and fails
+# when a crate falls below its floor.
+#
+# Fuzz and xtask binaries are excluded from the per-crate denominators - they
+# are host-side tooling, not shipped contract code.
+COVERAGE_FLOOR_FILE := config/coverage-floor.toml
+COVERAGE_FLOOR_CRATES := vesting debtor_attestation parameter_registry secondary_market
+# Optional baseline used by the PR delta gate (JSON: {"crate": percent}).
+COVERAGE_BASELINE ?=
+
 # Fuzzing knobs (see contracts/fuzz/README.md)
 FUZZ_ITERS  ?= 10000
 FUZZ_TARGET ?= marketplace
@@ -47,6 +61,7 @@ help:
 	@echo "  fuzz-deep            Run libFuzzer deep fuzz testing (nightly required)"
 	@echo "  coverage             Run code coverage analysis (requires cargo-tarpaulin)"
 	@echo "  coverage-per-contract  Enforce per-contract coverage floors (issue #683)"
+	@echo "  coverage-extended    Enforce per-crate floors for extended contracts (issue #997)"
 	@echo ""
 	@echo "Code quality targets:"
 	@echo "  fmt                  Format all Rust code using cargo fmt"
@@ -171,6 +186,36 @@ mutants-focus-treasury:
 	@echo "Running mutation testing on treasury contract..."
 	cargo mutants --timeout $(MUTANTS_TIMEOUT) -p kora-treasury -j 4
 
+# Focused mutation run for the marketplace listing-fee paths (issue #998).
+#
+# The focus set (files, fee symbols, `FeeContribution` storage paths, the
+# treasury routing branches and the documented equivalent-mutant allow list)
+# is defined in `mutants.toml` at the repository root. This target reads the
+# package list and the file list from there, so the focus is never unbounded
+# over the workspace: only the marketplace package and the two named source
+# files are mutated.
+#
+# See docs/ONBOARDING.md ("Mutation testing") for the local workflow.
+MUTANTS_FOCUS_CONFIG := mutants.toml
+MUTANTS_FOCUS_PACKAGE := kora-marketplace
+MUTANTS_FOCUS_FILES := contracts/marketplace/src/lib.rs contracts/treasury/src/lib.rs
+
+mutants-focus-marketplace-fees:
+	@command -v cargo-mutants >/dev/null 2>&1 || { \
+		echo "Error: cargo-mutants not found. Install with: cargo install cargo-mutants"; \
+		exit 1; \
+	}
+	@if [ ! -f "$(MUTANTS_FOCUS_CONFIG)" ]; then \
+		echo "Error: focus config $(MUTANTS_FOCUS_CONFIG) not found."; \
+		exit 1; \
+	fi
+	@echo "Running focused mutation testing on marketplace listing fees (issue #998)..."
+	@echo "  focus config : $(MUTANTS_FOCUS_CONFIG)"
+	@echo "  package      : $(MUTANTS_FOCUS_PACKAGE)"
+	@echo "  files        : $(MUTANTS_FOCUS_FILES)"
+	cargo mutants --timeout $(MUTANTS_TIMEOUT) -p $(MUTANTS_FOCUS_PACKAGE) -j 4 \
+		$(foreach f,$(MUTANTS_FOCUS_FILES),--file $(f))
+
 mutants-baseline:
 	@echo "Generating baseline mutation kill-rate report..."
 	@echo "See: https://docs.rs/cargo-mutants/latest/cargo_mutants/"
@@ -238,6 +283,25 @@ coverage-per-contract:
 		exit 1; \
 	fi; \
 	echo "All contracts meet their coverage floors"
+
+# ── Extended-Crate Coverage Floors (Issue #997) ─────────────────────────────────
+#
+# Enforces an explicit minimum line-coverage floor per extended workspace
+# contract (`vesting`, `debtor_attestation`, `parameter_registry`,
+# `secondary_market`). The floors live in `config/coverage-floor.toml` so
+# they are reviewed as data, and the fuzz/xtask binaries are excluded from
+# the denominators.
+#
+#   make coverage-extended
+#   make coverage-extended COVERAGE_BASELINE=baselines/coverage.json
+coverage-extended:
+	@echo "Enforcing per-crate coverage floors for extended contracts (issue #997)..."
+	@if [ ! -f "$(COVERAGE_FLOOR_FILE)" ]; then \
+		echo "ERROR: floor config $(COVERAGE_FLOOR_FILE) not found."; \
+		exit 1; \
+	fi
+	@bash scripts/check_coverage_floors.sh --config "$(COVERAGE_FLOOR_FILE)" \
+		$(if $(COVERAGE_BASELINE),--baseline $(COVERAGE_BASELINE),)
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 

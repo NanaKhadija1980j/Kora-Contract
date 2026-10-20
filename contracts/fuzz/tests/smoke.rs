@@ -93,6 +93,21 @@ smoke!(fuzz_price_oracle, "price_oracle", kora_fuzz::targets::price_oracle::run,
 smoke!(fuzz_dispute_resolution, "dispute_resolution", kora_fuzz::targets::dispute_resolution::run, 0xD159);
 smoke!(fuzz_secondary_market_settlement, "secondary_market_settlement", kora_fuzz::targets::secondary_market::run, 0x5EC0);
 
+// Issue #996: parameter_registry governance bounds. The target asserts that
+// out-of-bound writes never persist, in-bound writes persist, a
+// non-governance caller cannot mutate, and an unknown key id is rejected
+// consistently.
+smoke!(fuzz_parameter_registry_bounds, "parameter_registry_bounds", kora_fuzz::targets::parameter_registry_bounds::run, 0xB0DE);
+
+/// CI-bounded (non-ignored) check for the parameter_registry governance
+/// bounds. Replays the hand-crafted seed cases linked from
+/// `contracts/tests/governance_parameter_range_abuse.rs` so the invariants
+/// are checked on every `cargo test` pass, not only in the nightly fuzz job.
+#[test]
+fn parameter_registry_bounds_ci_seed_cases() {
+    kora_fuzz::targets::parameter_registry_bounds::assert_seed_cases();
+}
+
 #[test]
 fn secondary_market_settlement_ci_corpus_replay() {
     replay_corpus("secondary_market_settlement", kora_fuzz::targets::secondary_market::run);

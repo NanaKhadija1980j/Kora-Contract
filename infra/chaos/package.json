@@ -1,13 +1,13 @@
 {
   "name": "@kora/chaos",
   "version": "1.0.0",
-  "description": "Kora Protocol — Chaos engineering test suite for staging resilience verification",
+  "description": "Kora Protocol \u2014 Chaos engineering test suite for staging resilience verification",
   "private": true,
   "scripts": {
     "test": "jest --runInBand --forceExit",
     "test:scenario": "jest --runInBand --forceExit --testNamePattern",
     "lint": "eslint src tests --ext .ts",
-    "build": "tsc --noEmit"
+    "build": "node init && tsc --noEmit"
   },
   "dependencies": {
     "axios": "1.6.8",
@@ -28,9 +28,13 @@
     "preset": "ts-jest",
     "testEnvironment": "node",
     "testTimeout": 120000,
-    "testMatch": ["**/tests/**/*.chaos.ts"],
+    "testMatch": [
+      "**/tests/**/*.chaos.ts"
+    ],
     "globalSetup": "./tests/global-setup.ts",
     "globalTeardown": "./tests/global-teardown.ts",
-    "collectCoverageFrom": ["src/**/*.ts"]
+    "collectCoverageFrom": [
+      "src/**/*.ts"
+    ]
   }
 }

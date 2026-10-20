@@ -1,0 +1,118 @@
+# Cargo-mutants focus configuration for marketplace listing fees (issue #998).
+#
+# Why this file exists
+# --------------------
+# `cargo mutants` mutates every reachable statement in the package it is
+# pointed at. Run unbounded over the workspace that is both slow and noisy:
+# most surviving mutants live in code paths no test cares about, which buries
+# the mutants that *do* matter. The fee maths of `marketplace` is the
+# opposite case: a surviving mutant in `base_fee_bps`, `referrer_split_bps`
+# or the `FeeContribution` bookkeeping directly means lost protocol revenue
+# or an overcharged investor.
+#
+# This file is the reviewed, single source of truth for that focus set:
+#
+#   * `packages` - the only package the focus run may touch.
+#   * `focus`    - the source paths and the fee symbols whose mutants MUST be
+#                  killed. A survivor in this set is a release blocker.
+#   * `allow`    - documented *equivalent* mutants that are accepted, with
+#                  the reason they cannot be distinguished by observation.
+#
+# How it is used
+# --------------
+#   # locally (see docs/ONBOARDING.md -> "Mutation testing")
+#   make mutants-focus-marketplace-fees
+#
+#   # the CI job `mutants-marketplace-fees` in .github/workflows/ci.yml
+#   # runs the same Makefile target, with a job-level timeout, and
+#   # uploads the partial report when the run times out.
+#
+# The focus run is deliberately package-scoped: it never mutates the whole
+# workspace, so its runtime stays bounded (issue #998 acceptance criterion
+# "No mutants run on entire workspace unbounded").
+#
+# The `files` list below is parsed by the Makefile (see MUTANTS_FOCUS_FILES),
+# so the paths live here only once.
+
+[mutants]
+# Per-mutant timeout in seconds. Kept in sync with MUTANTS_TIMEOUT in the
+# Makefile so `make mutants` and `make mutants-focus-marketplace-fees` behave
+# the same way.
+timeout = 120
+# Parallel jobs. 4 keeps the focus run usable on a shared CI runner.
+jobs = 4
+# The only package the focus run may mutate.
+packages = ["kora-marketplace"]
+
+[mutants.focus]
+# Files whose mutants must be killed. The marketplace contract is the primary
+# file; the treasury file is included because the marketplace routes the
+# collected fee into `treasury.collect_fee` / `treasury.refund_fee`, and a
+# mutant in the routing branch silently drops or double-returns revenue.
+files = [
+  "contracts/marketplace/src/lib.rs",
+  "contracts/treasury/src/lib.rs",
+]
+
+# Fee-calculation symbols. These compute how much of a contribution is fee
+# and how much is net proceeds; an undetected mutant here misprices every
+# trade.
+marketplace_fee_symbols = [
+  "base_fee_bps",
+  "referrer_split_bps",
+  "apply_set_fee_bps",
+  "apply_set_referrer_split_bps",
+  "apply_set_tier_fee_bps",
+  "set_fee_bps",
+  "update_fee_bps",
+  "set_referrer_split_bps",
+  "set_tier_fee_bps",
+]
+
+# Fee state paths. `FeeContribution` is the per-(invoice, investor) record of
+# the fee already collected; it is what `claim_refund` claws back, so a mutant
+# in it double-charges or refunds the wrong amount.
+marketplace_fee_storage = [
+  "FeeContribution",
+  "FeeBps",
+  "ReferrerSplitBps",
+  "TierFeeBps",
+  "Contribution",
+]
+
+# Fee-routing branches: the paths that move the fee to the treasury and the
+# referrer split, and the refund path that reverses them.
+marketplace_fee_routing = [
+  "fund_invoice",
+  "claim_refund",
+  "collect_fee",
+  "refund_fee",
+]
+
+[mutants.allow]
+# Documented equivalent mutants. An entry is only acceptable when the mutant
+# is observationally identical to the original code for every input the
+# contract can receive, and the reason is recorded here.
+#
+# Constant folding on the 10_000 bps denominator: rewriting the literal
+# `10_000` as an equivalent folded constant produces the same expression, so
+# those mutants are equivalent and are accepted.
+equivalent_mutants = [
+  "contracts/marketplace/src/lib.rs:base_fee_bps:literal_10_000",
+  "contracts/marketplace/src/lib.rs:referrer_split_bps:literal_10_000",
+]
+
+# The referrer split and the treasury routing branches are *not* allowed to
+# survive. The complementary invariant harness for these lives in
+# contracts/fuzz/src/targets/marketplace_fee.rs (INV-FEE-1 .. INV-FEE-7);
+# run it with `make fuzz FUZZ_ITERS=50000` alongside the focus run.
+must_be_killed = [
+  "contracts/marketplace/src/lib.rs:base_fee_bps",
+  "contracts/marketplace/src/lib.rs:referrer_split_bps",
+  "contracts/marketplace/src/lib.rs:apply_set_fee_bps",
+  "contracts/marketplace/src/lib.rs:apply_set_referrer_split_bps",
+  "contracts/marketplace/src/lib.rs:apply_set_tier_fee_bps",
+  "contracts/marketplace/src/lib.rs:fund_invoice",
+  "contracts/marketplace/src/lib.rs:claim_refund",
+  "contracts/marketplace/src/lib.rs:FeeContribution",
+]

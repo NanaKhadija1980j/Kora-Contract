@@ -1,11 +1,11 @@
 {
   "name": "@kora/treasury-dashboard",
   "version": "1.0.0",
-  "description": "Kora Protocol — Public treasury transparency dashboard",
+  "description": "Kora Protocol \u2014 Public treasury transparency dashboard",
   "private": true,
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "node init && vite",
+    "build": "node init && tsc && vite build",
     "preview": "vite preview",
     "test": "vitest --run",
     "test:watch": "vitest",

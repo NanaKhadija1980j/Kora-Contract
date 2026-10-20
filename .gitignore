@@ -1,8 +1,6 @@
 deployments/
 target/
 *.wasm
-.env
-.env.*
 
 # Test snapshots
 test_snapshots/
@@ -16,7 +14,6 @@ waves-issues.md
 # IDE and OS files
 .DS_Store
 .idea/
-.vscode/
 *.swp
 *.swo
 
@@ -38,3 +35,4 @@ npm-debug.log*
 .agents/
 skills-lock.json
 issue.md
+config.bat

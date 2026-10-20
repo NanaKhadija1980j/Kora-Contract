@@ -67,6 +67,19 @@ high_risk = [
     "kora-treasury",          # Handles critical fee/distribution logic
 ]
 
+# Marketplace listing-fee focus (issue #998).
+#
+# The detailed focus set (fee symbols, `FeeContribution` storage paths, the
+# treasury routing branches and the documented equivalent-mutant allow list)
+# lives in `mutants.toml` at the repository root so it can be reviewed and
+# parsed independently. The `mutants-focus-marketplace-fees` Makefile target
+# and the `mutants-marketplace-fees` CI job both read it from there.
+#
+# This keeps the workspace-wide run above bounded while giving the fee maths
+# a dedicated, focused mutation pass (see mutants.toml for the full rationale).
+
+marketplace_fees = "mutants.toml"
+
 [mutants.reporting]
 # Generate HTML report for visualization
 html = true

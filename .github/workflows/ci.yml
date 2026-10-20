@@ -5,6 +5,11 @@ on:
     branches: ["main", "feature/**", "fix/**", "docs/**"]
   pull_request:
     branches: ["main"]
+  # Weekly mutation-testing sweep (issue #998). The mutants job below is
+  # schedule-only, so the rest of the pipeline keeps its push/PR triggers.
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -269,6 +274,86 @@ jobs:
           FUZZ_ITERS: "100"
         run: cargo test -p kora-fuzz --test smoke fuzz_dispute_resolution -- --ignored
 
+  # ─── parameter_registry governance bounds fuzz smoke (issue #996) ──────────
+  #
+  # Bounded run of the `fuzz_parameter_registry_bounds` target. The harness
+  # asserts that out-of-bound writes never persist, in-bound writes persist
+  # and read back, a non-governance caller cannot mutate, and an unknown key
+  # id is rejected consistently.
+  parameter-registry-fuzz-smoke:
+    name: parameter registry bounds fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run bounded parameter write sequences
+        env:
+          FUZZ_ITERS: "100"
+        run: cargo test -p kora-fuzz --test smoke fuzz_parameter_registry_bounds -- --ignored
+      - name: Replay the linked governance range-abuse seed cases
+        run: cargo test -p kora-fuzz --test smoke parameter_registry_bounds_ci_seed_cases
+
+  # ── Marketplace fee mutation testing (issue #998) ──────────────────────────
+  #
+  # Focused cargo-mutants run over the marketplace listing-fee paths. The
+  # focus set (fee symbols, `FeeContribution` storage, treasury routing
+  # branches) lives in `mutants.toml` at the repository root and is applied
+  # through the `mutants-focus-marketplace-fees` Makefile target, which
+  # scopes the run to the `kora-marketplace` package only - the run never
+  # mutates the whole workspace.
+  #
+  # The job is optional by design (issue #998 acceptance criteria):
+  #   * it runs on the weekly schedule and on manual dispatch, and
+  #   * on pull requests it only runs when the `mutation-testing` label is
+  #     applied by a maintainer, and it is allowed to fail there.
+  # A failure always uploads the partial report so the surviving mutants can
+  # be triaged.
+  mutants:
+    name: cargo-mutants (marketplace fees)
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'mutation-testing'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-mutants-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-mutants-
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Run focused marketplace fee mutants
+        run: make mutants-focus-marketplace-fees
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-marketplace-fees-report
+          path: mutants.out/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ── Code coverage gate (issue #643) ──────────────────────────────────────
   #
   # Measures code coverage using cargo-tarpaulin with a minimum threshold
@@ -334,6 +419,41 @@ jobs:
 
       - name: Enforce per-contract coverage floors
         run: make coverage-per-contract
+
+  # ── Extended-crate coverage floors (issue #997) ───────────────────────────
+  #
+  # The per-contract floors above cover the six core contracts. The extended
+  # workspace contracts (`vesting`, `debtor_attestation`,
+  # `parameter_registry`, `secondary_market`) each carry their own floor in
+  # `config/coverage-floor.toml`, and the fuzz/xtask binaries are excluded
+  # from the denominators (they are host-side tooling, not shipped contract
+  # code). The gate fails when any of those crates drops below its floor.
+  extended-coverage-floors:
+    name: extended coverage floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-coverage-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-coverage-
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin --locked --version 0.21.0
+
+      - name: Enforce per-crate floors for extended contracts
+        run: make coverage-extended
 
   # ── TTL Keeper validation (issue #644) ───────────────────────────────────
   #

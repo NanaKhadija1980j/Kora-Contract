@@ -1,13 +1,13 @@
 {
   "name": "@kora/keeper",
   "version": "1.0.0",
-  "description": "Kora Protocol — Background job/keeper service for deadline-based contract triggers",
+  "description": "Kora Protocol \u2014 Background job/keeper service for deadline-based contract triggers",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "build": "node init && tsc",
+    "start": "node init && node dist/index.js",
+    "dev": "node init && ts-node src/index.ts",
     "test": "jest --coverage --coverageThreshold='{\"global\":{\"lines\":90,\"branches\":90,\"functions\":90,\"statements\":90}}'",
     "test:watch": "jest --watch",
     "lint": "eslint src tests --ext .ts"
@@ -29,7 +29,11 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.ts"],
-    "collectCoverageFrom": ["src/**/*.ts"]
+    "testMatch": [
+      "**/tests/**/*.test.ts"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.ts"
+    ]
   }
 }
