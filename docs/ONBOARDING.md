@@ -136,6 +136,110 @@ by the #912/#911 onboarding change; verification was restricted to static review
 
 ---
 
+## 3. Mutation Testing (cargo-mutants)
+
+Line coverage tells you whether code *ran* during tests. Mutation testing
+tells you whether the tests would actually *catch a bug*: `cargo-mutants`
+rewrites one expression at a time and checks that the test suite fails.
+
+### Setup
+
+```bash
+cargo install cargo-mutants --locked
+```
+
+### Running it
+
+The repo ships two Makefile targets:
+
+```bash
+# Whole workspace (slow, broad). Use it to spot regressions.
+make mutants
+
+# Focused on the marketplace listing-fee paths (issue #998). This is the one
+# you want when you touch fee maths.
+make mutants-focus-marketplace-fees
+```
+
+The focused run is the important one. Fee arithmetic in `marketplace` decides
+how much of an investor's contribution is protocol revenue and how much is
+proceeds, so a surviving mutant there means lost revenue or an overcharged
+investor. The focus set lives in [`mutants.toml`](../mutants.toml) at the
+repository root and lists:
+
+- the package the run may mutate (`kora-marketplace` - never the whole
+  workspace),
+- the source files under mutation,
+- the fee-calculation symbols (`base_fee_bps`, `referrer_split_bps`, the
+  `apply_set_*` setters, ...),
+- the fee state paths (`FeeContribution`, `FeeBps`, `ReferrerSplitBps`,
+  `TierFeeBps`),
+- the treasury routing branches (`fund_invoice`, `claim_refund`,
+  `collect_fee`, `refund_fee`),
+- the allow-list of *documented equivalent* mutants, and
+- the `must_be_killed` list - a survivor in that set is a release blocker.
+
+The configuration is asserted by
+[`contracts/tests/issue_681_mutation_testing_harness.rs`](../contracts/tests/issue_681_mutation_testing_harness.rs),
+so a change that silently drops a fee path from the focus set fails the
+test suite.
+
+### CI
+
+The `mutants-marketplace-fees` job in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the same
+Makefile target. It is deliberately optional:
+
+- it runs on a weekly schedule and on manual dispatch,
+- on pull requests it only runs when a maintainer applies the
+  `mutation-testing` label, and it is allowed to fail there,
+- the job has a 60-minute timeout, and a failing run still uploads the
+  partial `mutants.out/` report so surviving mutants can be triaged.
+
+### Complementing it with fuzzing
+
+Mutation testing and fuzzing cover different failure modes and are meant to
+be used together. The fuzz harness for the same fee maths is
+[`contracts/fuzz/src/targets/marketplace_fee.rs`](../contracts/fuzz/src/targets/marketplace_fee.rs),
+which asserts the fee invariants (`fee + net == amount`, `fee >= 0`,
+`fee <= amount`, tier-fee bounds, zero-amount rejection, `MAX_AMOUNT`
+safety) on every input the fuzzer produces:
+
+```bash
+make fuzz FUZZ_ITERS=50000
+```
+
+Run the focused mutation pass and the fuzz harness together when you change
+fee maths; the mutation run proves the *tests* would catch a bad
+calculation, the fuzz run proves the *inputs* are explored widely enough to
+find one.
+
+---
+
+## 4. Contributing to Coverage Floors
+
+Extended workspace contracts (`vesting`, `debtor_attestation`,
+`parameter_registry`, `secondary_market`) each carry an explicit minimum
+line-coverage floor. The floors live in
+[`config/coverage-floor.toml`](../config/coverage-floor.toml) and are
+enforced by the `coverage-extended` Makefile target, which the CI
+`extended-coverage-floors` job runs. The fuzz and xtask binaries are
+excluded from the per-crate denominators - they are test tooling, not
+shipped contract code.
+
+To check the floors locally:
+
+```bash
+make coverage-extended
+```
+
+The gate is validated by
+[`contracts/tests/coverage_reporting_gate.rs`](../contracts/tests/coverage_reporting_gate.rs),
+which fails if a floor is missing from the config, if a floor is out of
+range, or if a crate's coverage drops below its floor.
+
+---
+
 ## Known Current Blockers
 
 This guide was validated by running the setup steps above end-to-end rather

@@ -100,4 +100,5 @@ kora-access-control = { path = "../access_control" }
 kora-price-oracle = { path = "../price_oracle" }
 kora-referral-rewards = { path = "../referral_rewards" }
 kora-secondary-market = { path = "../secondary_market" }
+kora-tranche = { path = "../tranche" }
 

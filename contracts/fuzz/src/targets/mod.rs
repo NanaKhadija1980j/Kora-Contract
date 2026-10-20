@@ -16,6 +16,11 @@ pub mod marketplace;
 /// Asserts INV-FEE-1 through INV-FEE-7 across the full valid input space.
 /// See the module-level doc-comment for the invariant descriptions.
 pub mod marketplace_fee;
+/// Governance-bounds fuzzing harness for the parameter registry.
+/// Asserts INV-PRB-1 through INV-PRB-5 (out-of-bound writes never persist,
+/// in-bound writes persist, non-governance callers cannot mutate, unknown key
+/// ids are rejected, and proposals are bounds-checked at proposal time).
+pub mod parameter_registry_bounds;
 pub mod price_oracle;
 pub mod risk_registry;
 pub mod secondary_market;

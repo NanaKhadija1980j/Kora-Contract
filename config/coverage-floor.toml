@@ -1,0 +1,58 @@
+# Per-crate minimum line-coverage floors (issue #997).
+#
+# The workspace-wide `COVERAGE_MIN` gate in the Makefile measures the whole
+# workspace as one number, so a single well-tested contract can mask a
+# poorly-tested one. This file adds an explicit floor per extended workspace
+# contract; `make coverage-extended` enforces each one separately and fails
+# the build when a crate drops below its floor.
+#
+# The floor for a crate is the minimum acceptable *line* coverage percent.
+# Floors are ratcheted upwards over time - a PR that raises coverage should
+# raise the floor in the same change so the improvement cannot silently be
+# given back.
+#
+# New crates inherit the workspace default (see `[defaults]`) until they are
+# baselined. Crates that genuinely cannot be measured (host-only tooling,
+# test harnesses) are listed under `[waived]` with a reason; the gate skips
+# them and the waiver is reviewed like any other config change.
+
+[defaults]
+# Floor applied to a crate that has no explicit entry under `[crates]`.
+# New crates inherit this until they are baselined.
+min_line_coverage = 50
+
+# Maximum tolerated drop (in percentage points) between the recorded
+# baseline and the current measurement before the PR delta gate fails.
+# A crate may sit slightly below its floor only if it also did so in the
+# baseline - the delta gate is what stops a floor from being lowered
+# silently in the same PR that breaches it.
+max_drop_percent = 1.0
+
+[crates]
+# Extended workspace contracts that ship protocol behaviour but were not
+# covered by the issue #683 per-contract floors.
+#
+# `vesting` - vesting schedules and releases.
+vesting = 55
+# `debtor_attestation` - debtor-side authenticity attestations.
+debtor_attestation = 50
+# `parameter_registry` - governance bounds on every protocol parameter.
+parameter_registry = 60
+# `secondary_market` - secondary position transfers and settlement.
+secondary_market = 65
+
+[excluded_bins]
+# Binaries excluded from the coverage denominators. These are host-side test
+# and build tooling, not shipped contract code, so their coverage is not a
+# meaningful measure of contract correctness.
+kora-fuzz = true
+kora-xtask = true
+kora-fuzz-fuzz = true
+
+[waived]
+# Crates whose floor is waived, with the reason. A crate listed here is
+# skipped by `make coverage-extended` and the reason is reviewed as part of
+# the config change.
+#
+# No waivers are currently in force: every extended contract in `[crates]`
+# is measured.

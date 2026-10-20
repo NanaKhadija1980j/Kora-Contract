@@ -26,6 +26,10 @@ pub enum TrancheError {
     PoolNotFound = 7,
     PoolAlreadyClosed = 8,
     TrancheNotFound = 9,
+    /// The caller is not allowed to drive the composition hooks.
+    NotAuthorized = 10,
+    /// The tranche already references this pool invoice.
+    AlreadyLinked = 11,
 }
 
 impl From<CommonError> for TrancheError {
@@ -48,6 +52,11 @@ pub enum DataKey {
     AccessControl,
     Tranche(u64),
     TranchePositions(u64, Address),
+    /// Composition callers allowed to drive the pool-linking hooks.
+    /// Stored per address so the allow-list can be audited one entry at a time.
+    AuthorizedCaller(Address),
+    /// Financing-pool invoice ids linked to a tranche, in link order.
+    TranchePoolLinks(u64),
 }
 
 #[contracttype]
@@ -78,6 +87,7 @@ impl TrancheContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(TrancheError::AlreadyInitialized);
         }
+        admin.require_auth();
         kora_shared::validation::require_not_self(&env, &admin)?;
         kora_shared::validation::require_not_self(&env, &invoice_nft)?;
         kora_shared::validation::require_not_self(&env, &financing_pool)?;
@@ -186,6 +196,146 @@ impl TrancheContract {
             .persistent()
             .get(&DataKey::Tranche(tranche_id))
             .ok_or(TrancheError::TrancheNotFound)
+    }
+
+    // ── Pool composition hooks ───────────────────────────────────────────────
+    //
+    // A tranche is a composition of several financing-pool positions. The
+    // composition is driven from the pool side, so the tranche contract keeps
+    // two things:
+    //
+    //   * a pointer to the financing pool it composes with, and
+    //   * an allow-list of callers authorised to drive the linking hooks.
+    //
+    // The admin (the protocol admin that deployed the tranche contract) owns
+    // both. The allow-list is deliberately explicit rather than "anyone who
+    // holds a tranche position", because linking a pool position to a tranche
+    // changes the settlement surface of that position.
+
+    /// Admin-only. Re-point the financing pool this tranche contract composes
+    /// with. Used at deploy time when the pool address is known only after the
+    /// pool has been deployed.
+    pub fn set_financing_pool(
+        env: Env,
+        admin: Address,
+        financing_pool: Address,
+    ) -> Result<(), TrancheError> {
+        admin.require_auth();
+        Self::require_admin(&env, &admin)?;
+        kora_shared::validation::require_not_self(&env, &financing_pool)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::FinancingPool, &financing_pool);
+        Ok(())
+    }
+
+    /// Permissionless read of the financing pool this contract composes with.
+    pub fn get_financing_pool(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::FinancingPool)
+    }
+
+    /// Admin-only. Authorise `caller` to drive the composition hooks.
+    pub fn add_authorized_caller(
+        env: Env,
+        admin: Address,
+        caller: Address,
+    ) -> Result<(), TrancheError> {
+        admin.require_auth();
+        Self::require_admin(&env, &admin)?;
+        kora_shared::validation::require_not_self(&env, &caller)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::AuthorizedCaller(caller), &true);
+        Ok(())
+    }
+
+    /// Admin-only. Revoke a previously authorised composition caller.
+    pub fn remove_authorized_caller(
+        env: Env,
+        admin: Address,
+        caller: Address,
+    ) -> Result<(), TrancheError> {
+        admin.require_auth();
+        Self::require_admin(&env, &admin)?;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AuthorizedCaller(caller));
+        Ok(())
+    }
+
+    /// Permissionless read of the composition allow-list.
+    pub fn is_authorized_caller(env: Env, caller: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AuthorizedCaller(caller))
+            .unwrap_or(false)
+    }
+
+    /// Composition hook. Links a financing-pool position to a tranche.
+    ///
+    /// Only an authorised caller may link. The tranche must exist and must
+    /// still be open, and the same pool position may not be linked twice -
+    /// a double link would double-count the position in the tranche's
+    /// composition.
+    pub fn link_pool_position(
+        env: Env,
+        caller: Address,
+        tranche_id: u64,
+        invoice_id: u64,
+    ) -> Result<(), TrancheError> {
+        caller.require_auth();
+        if !Self::is_authorized_caller(env.clone(), caller.clone()) {
+            return Err(TrancheError::NotAuthorized);
+        }
+
+        let tranche: Tranche = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Tranche(tranche_id))
+            .ok_or(TrancheError::TrancheNotFound)?;
+
+        if tranche.is_closed {
+            return Err(TrancheError::PoolAlreadyClosed);
+        }
+
+        let mut links: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TranchePoolLinks(tranche_id))
+            .unwrap_or_else(|| Vec::new(&env));
+
+        if links.contains(&invoice_id) {
+            return Err(TrancheError::AlreadyLinked);
+        }
+
+        links.push_back(invoice_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TranchePoolLinks(tranche_id), &links);
+
+        Ok(())
+    }
+
+    /// Permissionless read of the pool positions linked to a tranche, in link
+    /// order.
+    pub fn get_pool_positions(env: Env, tranche_id: u64) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::TranchePoolLinks(tranche_id))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Admin check against the stored admin address.
+    fn require_admin(env: &Env, caller: &Address) -> Result<(), TrancheError> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(TrancheError::NotInitialized)?;
+        if &admin != caller {
+            return Err(TrancheError::NotAdmin);
+        }
+        Ok(())
     }
 }
 

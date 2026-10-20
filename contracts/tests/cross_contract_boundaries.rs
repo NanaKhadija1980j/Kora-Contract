@@ -46,6 +46,7 @@ use kora_shared::{
     errors::KoraError,
     types::{RiskTier},
 };
+use kora_tranche::TrancheContract;
 use kora_treasury::{TreasuryContract, TreasuryContractClient, TreasuryError};
 use kora_vesting::{VestingContract, VestingContractClient, VestingError};
 use soroban_sdk::{
@@ -656,6 +657,225 @@ fn test_only_admin_can_set_vesting_contract() {
 }
 
 // ============================================================================
+// Test Suite 8: Tranche <-> Financing Pool Composition Boundaries
+// ============================================================================
+//
+// The tranche contract composes financing_pool positions into a structured
+// product (issue #990). Two boundaries matter:
+//
+//   1. Only the tranche *admin* may manage the composition allow-list and
+//      re-point the composition pool.
+//   2. Only an *authorized caller* on that allow-list may link a pool
+//      position into a tranche.
+//
+// Both are enforced by the tranche contract; these tests assert the
+// boundary holds for a random address, and that the authorized caller (the
+// financing pool) can perform the link.
+
+/// Deploys a tranche contract wired to the pool address.
+fn setup_tranche(t: &TestContext) -> (Address, kora_tranche::TrancheContractClient<'static>) {
+    let tranche_addr = t.env.register_contract(None, kora_tranche::TrancheContract);
+    let tranche = kora_tranche::TrancheContractClient::new(&t.env, &tranche_addr);
+    tranche.initialize(
+        &t.admin,
+        &t.nft_addr,
+        &t.pool_addr,
+        &t.treasury_addr,
+        &t.access_control,
+    );
+    (tranche_addr, tranche)
+}
+
+#[test]
+fn test_only_tranche_admin_can_set_composition_pool() {
+    let t = setup();
+    let (_tranche_addr, tranche) = setup_tranche(&t);
+
+    let new_pool = Address::generate(&t.env);
+    let stranger = Address::generate(&t.env);
+
+    t.env.mock_all_auths_allowing_non_root_auth();
+
+    // A random address must not be able to re-point the composition pool.
+    let result = tranche.try_set_financing_pool(&stranger, &new_pool);
+    assert!(
+        result.is_err(),
+        "Only the tranche admin should be able to set the composition pool"
+    );
+
+    // The admin can.
+    let result = tranche.try_set_financing_pool(&t.admin, &new_pool);
+    assert!(
+        result.is_ok(),
+        "Tranche admin should be able to set the composition pool"
+    );
+    assert_eq!(
+        tranche.get_financing_pool(),
+        Some(new_pool),
+        "Composition pool pointer should be readable"
+    );
+}
+
+#[test]
+fn test_only_tranche_admin_can_manage_authorized_callers() {
+    let t = setup();
+    let (_tranche_addr, tranche) = setup_tranche(&t);
+
+    let caller = Address::generate(&t.env);
+    let stranger = Address::generate(&t.env);
+
+    t.env.mock_all_auths_allowing_non_root_auth();
+
+    // A random address must not be able to widen the allow-list.
+    let result = tranche.try_add_authorized_caller(&stranger, &caller);
+    assert!(
+        result.is_err(),
+        "Only the tranche admin should be able to add an authorized caller"
+    );
+    assert!(
+        !tranche.is_authorized_caller(&caller),
+        "A rejected add must not grant composition rights"
+    );
+
+    // The admin can add and revoke.
+    let result = tranche.try_add_authorized_caller(&t.admin, &caller);
+    assert!(
+        result.is_ok(),
+        "Tranche admin should be able to add an authorized caller"
+    );
+    assert!(
+        tranche.is_authorized_caller(&caller),
+        "Added caller should be on the composition allow-list"
+    );
+
+    let result = tranche.try_remove_authorized_caller(&t.admin, &caller);
+    assert!(
+        result.is_ok(),
+        "Tranche admin should be able to remove an authorized caller"
+    );
+    assert!(
+        !tranche.is_authorized_caller(&caller),
+        "Removed caller must no longer be on the composition allow-list"
+    );
+}
+
+#[test]
+fn test_only_authorized_caller_can_link_pool_position() {
+    let t = setup();
+    let (tranche_addr, tranche) = setup_tranche(&t);
+
+    // The tranche is empty, so linking must fail even for an authorized
+    // caller - the tranche has to exist first.
+    let stranger = Address::generate(&t.env);
+    t.env.mock_all_auths_allowing_non_root_auth();
+
+    let result = tranche.try_link_pool_position(&stranger, &1u64, &1u64);
+    assert!(
+        result.is_err(),
+        "An unauthorized caller must not be able to link a pool position"
+    );
+
+    // Authorize the pool address, then the link still fails because no
+    // tranche exists yet - but it now fails for the right reason.
+    tranche.add_authorized_caller(&t.admin, &t.pool_addr);
+    let result = tranche.try_link_pool_position(&t.pool_addr, &1u64, &1u64);
+    assert!(
+        result.is_err(),
+        "Linking a pool position for a non-existent tranche must fail"
+    );
+
+    // A tranche that exists accepts the link from the authorized caller.
+    let invoice_id = t.nft.mint_invoice(
+        &Address::generate(&t.env),
+        &1_000_000i128,
+        &Symbol::new(&t.env, "USD"),
+        &t.env.ledger().timestamp() + 86400,
+        &String::from_str(&t.env, "debtor123"),
+        &String::from_str(&t.env, "QmHash"),
+        &RiskTier::A,
+        &80u32,
+    );
+
+    let tranche_id = tranche
+        .try_create_tranche(&t.admin, &vec![&t.env, invoice_id])
+        .unwrap()
+        .unwrap();
+    assert!(tranche_id > 0, "Tranche should be created with a positive id");
+
+    let result = tranche.try_link_pool_position(&t.pool_addr, &tranche_id, &invoice_id);
+    assert!(
+        result.is_ok(),
+        "An authorized caller should be able to link a pool position"
+    );
+
+    let links = tranche.get_pool_positions(&tranche_id);
+    assert_eq!(
+        links.len(),
+        1,
+        "The linked pool position should be recorded once"
+    );
+    assert_eq!(links.get(0), Some(invoice_id));
+
+    // Linking the same pool position twice must fail - it would double-count.
+    let result = tranche.try_link_pool_position(&t.pool_addr, &tranche_id, &invoice_id);
+    assert!(
+        result.is_err(),
+        "Linking the same pool position twice must fail"
+    );
+
+    // A random address still cannot link.
+    let result = tranche.try_link_pool_position(&stranger, &tranche_id, &invoice_id);
+    assert!(
+        result.is_err(),
+        "An unauthorized caller must not be able to link a pool position"
+    );
+
+    // The tranche address itself is not on the allow-list by default, so it
+    // cannot drive composition hooks on its own.
+    let result = tranche.try_link_pool_position(&tranche_addr, &tranche_id, &invoice_id);
+    assert!(
+        result.is_err(),
+        "A contract outside the composition allow-list must not link positions"
+    );
+}
+
+#[test]
+fn test_tranche_funding_requires_open_tranche() {
+    let t = setup();
+    let (_tranche_addr, tranche) = setup_tranche(&t);
+
+    let investor = Address::generate(&t.env);
+    t.env.mock_all_auths_allowing_non_root_auth();
+
+    // Funding a tranche that does not exist must fail.
+    let result = tranche.try_fund_tranche(&investor, &999u64, &1_000i128);
+    assert!(result.is_err(), "Funding a non-existent tranche must fail");
+
+    // Zero amounts are rejected.
+    let invoice_id = t.nft.mint_invoice(
+        &Address::generate(&t.env),
+        &1_000_000i128,
+        &Symbol::new(&t.env, "USD"),
+        &t.env.ledger().timestamp() + 86400,
+        &String::from_str(&t.env, "debtor123"),
+        &String::from_str(&t.env, "QmHash"),
+        &RiskTier::A,
+        &80u32,
+    );
+    let tranche_id = tranche
+        .try_create_tranche(&t.admin, &vec![&t.env, invoice_id])
+        .unwrap()
+        .unwrap();
+
+    let result = tranche.try_fund_tranche(&investor, &tranche_id, &0i128);
+    assert!(result.is_err(), "Zero-amount tranche funding must be rejected");
+
+    // A positive amount is accepted and recorded.
+    let result = tranche.try_fund_tranche(&investor, &tranche_id, &500i128);
+    assert!(result.is_ok(), "Positive-amount tranche funding should succeed");
+}
+
+// ============================================================================
 // Coverage Summary
 // ============================================================================
 
@@ -671,13 +891,14 @@ fn test_coverage_summary() {
     println!("  ✓ Read-only function access (3 tests)");
     println!("  ✓ Vesting → Governance Voting boundaries (4 tests)");
     println!("");
-    println!("Total: 24 test cases covering:");
+    println!("Total: 28 test cases covering:");
     println!("  - Authorized caller enforcement");
     println!("  - Unauthorized caller rejection");
     println!("  - Cross-contract privilege boundaries");
     println!("  - Attack scenario prevention");
     println!("  - Read vs. write access separation");
     println!("  - Vesting-based vote weight computation");
+    println!("  - Tranche composition allow-list and pool linking");
     println!("");
     println!("Result: Cross-contract authorization boundaries verified");
 }
